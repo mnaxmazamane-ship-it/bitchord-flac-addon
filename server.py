@@ -7,6 +7,14 @@ app = Flask(__name__)
 IA_SEARCH_URL = "https://archive.org/advancedsearch.php"
 IA_METADATA_URL = "https://archive.org/metadata/"
 
+# Enable CORS for BitChord requests
+@app.after_request
+def add_cors_headers(response):
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type,Authorization'
+    response.headers['Access-Control-Allow-Methods'] = 'GET,POST,OPTIONS'
+    return response
+
 @app.route("/")
 @app.route("/manifest.json")
 def manifest():
@@ -39,21 +47,24 @@ def search():
         "output": "json"
     }
     
-    res = requests.get(IA_SEARCH_URL, params=params).json()
-    docs = res.get("response", {}).get("docs", [])
-    
-    tracks = []
-    for doc in docs:
-        tracks.append({
-            "id": doc.get("identifier"),
-            "title": doc.get("title", "Unknown Title"),
-            "artist": doc.get("creator", "Unknown Artist"),
-            "audioQuality": "LOSSLESS",
-            "format": "FLAC",
-            "isLossless": True
-        })
+    try:
+        res = requests.get(IA_SEARCH_URL, params=params, timeout=10).json()
+        docs = res.get("response", {}).get("docs", [])
         
-    return jsonify({"tracks": tracks, "total": len(tracks)})
+        tracks = []
+        for doc in docs:
+            tracks.append({
+                "id": doc.get("identifier"),
+                "title": doc.get("title", "Unknown Title"),
+                "artist": doc.get("creator", "Internet Archive"),
+                "audioQuality": "LOSSLESS",
+                "format": "FLAC",
+                "isLossless": True
+            })
+            
+        return jsonify({"tracks": tracks, "total": len(tracks)})
+    except Exception as e:
+        return jsonify({"tracks": [], "error": str(e)}), 500
 
 @app.route("/stream")
 def stream():
@@ -61,27 +72,33 @@ def stream():
     if not item_id:
         return jsonify({"error": "Missing id"}), 400
 
-    res = requests.get(f"{IA_METADATA_URL}{item_id}").json()
-    files = res.get("files", [])
-    server = res.get("server")
-    dir_path = res.get("dir")
+    try:
+        res = requests.get(f"{IA_METADATA_URL}{item_id}", timeout=10).json()
+        files = res.get("files", [])
+        server = res.get("server")
+        dir_path = res.get("dir")
 
-    flac_file = next((f.get("name") for f in files if f.get("format") == "FLAC" or f.get("name", "").lower().endswith(".flac")), None)
+        # Locate the exact FLAC file
+        flac_file = next((f.get("name") for f in files if f.get("format") == "FLAC" or f.get("name", "").lower().endswith(".flac")), None)
 
-    if not flac_file:
-        return jsonify({"error": "No FLAC file found"}), 404
+        if not flac_file:
+            return jsonify({"error": "No FLAC file found"}), 404
 
-    direct_url = f"https://{server}{dir_path}/{flac_file}"
+        direct_url = f"https://{server}{dir_path}/{flac_file}"
 
-    # Return JSON payload with explicit stream URL and headers
-    return jsonify({
-        "url": direct_url,
-        "format": "FLAC",
-        "quality": "LOSSLESS",
-        "headers": {
-            "User-Agent": "Mozilla/5.0"
-        }
-    })
+        # BitChord stream schema requirement
+        return jsonify({
+            "url": direct_url,
+            "streamUrl": direct_url,
+            "format": "FLAC",
+            "quality": "LOSSLESS",
+            "isLossless": True,
+            "headers": {
+                "User-Agent": "Mozilla/5.0"
+            }
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
