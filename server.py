@@ -21,7 +21,7 @@ def manifest():
         "id": "com.bitchord.ia.flac",
         "name": "Internet Archive FLAC",
         "version": "1.0.0",
-        "description": "Lossless FLAC audio streams from Internet Archive",
+        "description": "FLAC audio streams from Internet Archive",
         "endpoints": {
             "search": "/search",
             "stream": "/stream"
@@ -68,19 +68,37 @@ def search():
 
 @app.route("/stream")
 def stream():
-    item_id = request.args.get("id")
-    redirect_mode = request.args.get("redirect", "true") # Default to direct redirect
+    item_id = request.args.get("id") or request.args.get("query") or request.args.get("title")
     
     if not item_id:
-        return jsonify({"error": "Missing id"}), 400
+        return jsonify({"error": "Missing track identifier"}), 400
 
     try:
+        # First attempt: treat item_id as a direct Internet Archive item ID
         res = requests.get(f"{IA_METADATA_URL}{item_id}", timeout=10).json()
         files = res.get("files", [])
         server = res.get("server")
         dir_path = res.get("dir")
 
-        # Find the exact FLAC file
+        # If direct lookup fails, fall back to searching Internet Archive using the query/id text
+        if not files or not server:
+            search_params = {
+                "q": f'({item_id}) AND mediatype:(audio) AND format:(FLAC)',
+                "fl[]": ["identifier"],
+                "rows": 1,
+                "output": "json"
+            }
+            search_res = requests.get(IA_SEARCH_URL, params=search_params, timeout=10).json()
+            docs = search_res.get("response", {}).get("docs", [])
+            
+            if docs:
+                item_id = docs[0].get("identifier")
+                res = requests.get(f"{IA_METADATA_URL}{item_id}", timeout=10).json()
+                files = res.get("files", [])
+                server = res.get("server")
+                dir_path = res.get("dir")
+
+        # Extract FLAC file
         flac_file = next((f.get("name") for f in files if f.get("format") == "FLAC" or f.get("name", "").lower().endswith(".flac")), None)
 
         if not flac_file:
@@ -88,18 +106,7 @@ def stream():
 
         direct_url = f"https://{server}{dir_path}/{flac_file}"
 
-        # If redirect parameter is false, return JSON; otherwise, HTTP 302 directly to raw FLAC
-        if redirect_mode.lower() == "false":
-            return jsonify({
-                "url": direct_url,
-                "streamUrl": direct_url,
-                "format": "FLAC",
-                "mimeType": "audio/flac",
-                "quality": "LOSSLESS",
-                "isLossless": True
-            })
-        
-        # Direct HTTP redirect (forces ExoPlayer to stream FLAC natively)
+        # Return HTTP 302 direct stream redirect for BitChord ExoPlayer
         return redirect(direct_url, code=302)
 
     except Exception as e:
