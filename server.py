@@ -1,6 +1,6 @@
 import os
 import requests
-from flask import Flask, request, jsonify, redirect
+from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
@@ -38,10 +38,10 @@ def search():
         "rows": limit,
         "output": "json"
     }
-
+    
     res = requests.get(IA_SEARCH_URL, params=params).json()
     docs = res.get("response", {}).get("docs", [])
-
+    
     tracks = []
     for doc in docs:
         tracks.append({
@@ -49,9 +49,10 @@ def search():
             "title": doc.get("title", "Unknown Title"),
             "artist": doc.get("creator", "Unknown Artist"),
             "audioQuality": "LOSSLESS",
-            "format": "FLAC"
+            "format": "FLAC",
+            "isLossless": True
         })
-
+        
     return jsonify({"tracks": tracks, "total": len(tracks)})
 
 @app.route("/stream")
@@ -70,7 +71,17 @@ def stream():
     if not flac_file:
         return jsonify({"error": "No FLAC file found"}), 404
 
-    return redirect(f"https://{server}{dir_path}/{flac_file}")
+    direct_url = f"https://{server}{dir_path}/{flac_file}"
+
+    # Return JSON payload with explicit stream URL and headers
+    return jsonify({
+        "url": direct_url,
+        "format": "FLAC",
+        "quality": "LOSSLESS",
+        "headers": {
+            "User-Agent": "Mozilla/5.0"
+        }
+    })
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
